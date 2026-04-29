@@ -144,6 +144,12 @@ pub async fn cmd_upload_file(
     bw_state: State<'_, BandwidthManager>,
 ) -> Result<String, String> {
     let size = std::fs::metadata(&path).map_err(|e| e.to_string())?.len();
+    // Locked-order exception (PATTERNS.md Dev-3): bandwidth check intentionally
+    // runs BEFORE the mock branch and the scoping gate. Rationale: fail-fast on
+    // bandwidth-cap exhaustion regardless of mock mode — the cap is a global
+    // invariant that does not depend on Telegram I/O. Side effect: a bandwidth-
+    // exhausted mock build returns Err here instead of the mock-success path,
+    // so mock mode does NOT fully no-op when the cap is hit. Accepted trade-off.
     bw_state.can_transfer(size)?;
 
     let tid = transfer_id.unwrap_or_default();
