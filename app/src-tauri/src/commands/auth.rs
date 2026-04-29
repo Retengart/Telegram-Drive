@@ -186,7 +186,14 @@ pub async fn cmd_logout(
     *state.password_token.lock().await = None;
     *state.api_id.lock().await = None;
 
-    // [scoping] clear the TD channel cache — next login will repopulate via cmd_scan_folders.
+    // [scoping] clear the TD channel cache — next login will repopulate via
+    // cmd_scan_folders. Position is informational only: by the time we reach
+    // this line, state.client = None has already been set, so any concurrent
+    // gated command that grabbed a Client clone before logout started has
+    // already either passed the gate (validated against the stale cache) or
+    // failed at resolve_peer with a network/auth error. No new gated op can
+    // possibly reach require_td_peer once state.client is None. The clear is
+    // a hygiene measure for the next session, not a race-mitigation barrier.
     {
         let mut guard = state.td_channel_cache.write().await;
         guard.clear();
