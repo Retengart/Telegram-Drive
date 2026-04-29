@@ -20,11 +20,18 @@ pub struct TelegramState {
     pub runner_shutdown: Arc<std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>>,
     /// Counter for debugging runner lifecycle
     pub runner_count: Arc<std::sync::atomic::AtomicU32>,
+    /// Cached set of [TD]-marked channel ids — populated by `cmd_scan_folders`
+    /// and `cmd_create_folder`, invalidated by `cmd_delete_folder` and
+    /// `cmd_logout`. Uses `tokio::sync::RwLock` (not `std::sync::Mutex`)
+    /// because reads dominate and the cache is never touched from
+    /// `RunEvent::Exit`.
+    pub td_channel_cache: Arc<tokio::sync::RwLock<std::collections::HashSet<i64>>>,
 }
 
 pub mod auth;
 pub mod fs;
 pub mod preview;
+pub mod scoping;
 pub mod utils;
 pub mod network;
 pub mod streaming;
@@ -32,6 +39,7 @@ pub mod streaming;
 pub use auth::*;
 pub use fs::*;
 pub use preview::*;
+pub use scoping::*;
 pub use utils::*;
 pub use network::*;
 pub use streaming::*;
