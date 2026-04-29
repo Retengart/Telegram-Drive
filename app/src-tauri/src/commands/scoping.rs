@@ -11,6 +11,15 @@
 //! Populated by `cmd_scan_folders` (wholesale replace) and `cmd_create_folder`
 //! (insert), invalidated by `cmd_delete_folder` (remove) and `cmd_logout`
 //! (clear).
+//!
+//! Cache-HIT trade-off (D-02, WR-02): a cache hit returns the resolved peer
+//! WITHOUT re-checking the live `[TD]` title or `[telegram-drive-folder]`
+//! about marker. If the user manually unmarks a channel via the Telegram
+//! desktop client between scans, destructive ops on that channel still pass
+//! the gate until the next `cmd_scan_folders` or `cmd_logout` rebuilds the
+//! cache. Auto-correction only fires on cache MISS. Threat is low (the user
+//! is the one who removed the marker), but cache HIT is the silent-failure
+//! path — keep this in mind when reviewing future cache-policy changes.
 
 use grammers_client::Client;
 use grammers_client::types::Peer;
