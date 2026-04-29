@@ -6,6 +6,7 @@ use crate::TelegramState;
 use crate::models::{FolderMetadata, FileMetadata};
 use crate::bandwidth::BandwidthManager;
 use crate::commands::utils::{resolve_peer, map_error};
+use crate::commands::scoping::require_td_peer;
 
 #[tauri::command]
 pub async fn cmd_create_folder(
@@ -94,8 +95,13 @@ pub async fn cmd_delete_folder(
     let client = client_opt.unwrap();
     log::info!("Deleting folder/channel: {}", folder_id);
 
-    let peer = resolve_peer(&client, Some(folder_id)).await?;
-    
+    // [scoping] gate — reject non-TD peers and Saved Messages.
+    let peer = require_td_peer(&state, &client, Some(folder_id), false).await
+        .map_err(|e| {
+            log::warn!("[scoping] reject command=cmd_delete_folder folder_id={:?} reason={}", Some(folder_id), e);
+            serde_json::to_string(&e).unwrap_or_else(|_| e.to_string())
+        })?;
+
     let input_channel = match peer {
         Peer::Channel(c) => {
              let chan = &c.raw;
@@ -149,7 +155,14 @@ pub async fn cmd_upload_file(
         return Ok("Mock upload successful".to_string());
     }
     let client = client_opt.unwrap();
-    
+
+    // [scoping] gate — reject upload to non-TD peer (D-10 in-spirit-of-SCOPE).
+    let peer = require_td_peer(&state, &client, folder_id, true).await
+        .map_err(|e| {
+            log::warn!("[scoping] reject command=cmd_upload_file folder_id={:?} reason={}", folder_id, e);
+            serde_json::to_string(&e).unwrap_or_else(|_| e.to_string())
+        })?;
+
     // Emit start progress
     if !tid.is_empty() {
         let _ = app_handle.emit("upload-progress", ProgressPayload { id: tid.clone(), percent: 0 });
@@ -157,16 +170,14 @@ pub async fn cmd_upload_file(
 
     let path_clone = path.clone();
     let client_clone = client.clone();
-    
+
     let uploaded_file = tauri::async_runtime::spawn(async move {
         client_clone.upload_file(&path_clone).await
     }).await.map_err(|e| format!("Task join error: {}", e))?
       .map_err(map_error)?;
-        
+
     let message = InputMessage::new().text("").file(uploaded_file);
 
-    let peer = resolve_peer(&client, folder_id).await?;
-    
     client.send_message(&peer, message).await.map_err(map_error)?;
     
     bw_state.add_up(size);
@@ -192,7 +203,11 @@ pub async fn cmd_delete_file(
     }
     let client = client_opt.unwrap();
 
-    let peer = resolve_peer(&client, folder_id).await?;
+    let peer = require_td_peer(&state, &client, folder_id, true).await
+        .map_err(|e| {
+            log::warn!("[scoping] reject command=cmd_delete_file folder_id={:?} reason={}", folder_id, e);
+            serde_json::to_string(&e).unwrap_or_else(|_| e.to_string())
+        })?;
     client.delete_messages(&peer, &[message_id]).await.map_err(|e| e.to_string())?;
     Ok(true)
 }
@@ -289,8 +304,17 @@ pub async fn cmd_move_files(
     }
     let client = client_opt.unwrap();
 
-    let source_peer = resolve_peer(&client, source_folder_id).await?;
-    let target_peer = resolve_peer(&client, target_folder_id).await?;
+    let source_peer = require_td_peer(&state, &client, source_folder_id, true).await
+        .map_err(|e| {
+            log::warn!("[scoping] reject command=cmd_move_files folder_id={:?} reason={}", source_folder_id, e);
+            serde_json::to_string(&e).unwrap_or_else(|_| e.to_string())
+        })?;
+
+    let target_peer = require_td_peer(&state, &client, target_folder_id, true).await
+        .map_err(|e| {
+            log::warn!("[scoping] reject command=cmd_move_files folder_id={:?} reason={}", target_folder_id, e);
+            serde_json::to_string(&e).unwrap_or_else(|_| e.to_string())
+        })?;
 
     match client.forward_messages(&target_peer, &message_ids, &source_peer).await {
         Ok(_) => {},
