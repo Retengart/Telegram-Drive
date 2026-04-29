@@ -29,24 +29,38 @@ fn capabilities_default_does_not_grant_broad_fs_access() {
         .expect("capabilities/default.json missing `permissions` array");
 
     for perm in perms {
-        let s = perm.as_str().unwrap_or("");
+        // Tauri 2 capability syntax permits permissions as either string
+        // OR object form (e.g. `{"identifier": "fs:default", "allow": [...]}`
+        // for scoped perms). Extract the identifier in both shapes — silently
+        // ignoring object-form entries would let a future PR re-introduce
+        // `fs:default` via the object form and bypass the gate entirely.
+        let identifier: &str = match perm {
+            serde_json::Value::String(s) => s.as_str(),
+            serde_json::Value::Object(map) => map
+                .get("identifier")
+                .and_then(|v| v.as_str())
+                .unwrap_or_else(|| {
+                    panic!("object-form permission missing `identifier`: {:?}", perm)
+                }),
+            _ => panic!("permission entry must be string or object: {:?}", perm),
+        };
 
         // Rule 1: exact-match deny
         for banned in FORBIDDEN_EXACT {
             assert!(
-                s != *banned,
+                identifier != *banned,
                 "CAP-03 regression: forbidden permission `{}` is back in capabilities/default.json",
                 banned
             );
         }
 
         // Rule 2: substring deny — but ONLY for fs:* permissions
-        if s.starts_with("fs:") {
+        if identifier.starts_with("fs:") {
             for banned in FORBIDDEN_FS_SUBSTR {
                 assert!(
-                    !s.contains(banned),
+                    !identifier.contains(banned),
                     "CAP-03 regression: fs permission `{}` matches forbidden substring `{}`",
-                    s, banned
+                    identifier, banned
                 );
             }
         }
