@@ -8,9 +8,11 @@ use std::path::PathBuf;
 const FORBIDDEN_EXACT: &[&str] = &["fs:default"];
 
 /// Permission substrings that must NEVER appear when prefixed with `fs:`.
-/// Matches `fs:allow-appdata-read-recursive`, `fs:allow-appdata-write-recursive`,
-/// `fs:allow-appdata-meta-recursive`, AND any future `fs:*recursive*` variant.
-const FORBIDDEN_FS_SUBSTR: &[&str] = &["recursive"];
+/// Per CONTEXT D-04, ban any `recursive`, `write`, or `meta` fs permission —
+/// including non-recursive variants such as `fs:allow-appdata-write` and
+/// `fs:allow-appdata-meta`. The blast-radius is the original CRITICAL #1
+/// (WebView reads `telegram.session`); narrowing this list re-opens it.
+const FORBIDDEN_FS_SUBSTR: &[&str] = &["recursive", "write", "meta"];
 
 #[test]
 fn capabilities_default_does_not_grant_broad_fs_access() {
@@ -56,12 +58,18 @@ fn capabilities_test_rejects_synthetic_violation() {
     // W2: prove the banned-list logic actually rejects a synthetic violation
     // without needing adversarial reasoning. This test does NOT touch the on-disk
     // default.json — it builds an in-memory permissions array containing banned
-    // entries and runs the same rule predicate against it, asserting at least
-    // one banned permission is detected.
+    // entries and runs the same rule predicate against it, asserting EVERY
+    // banned permission is detected (exact-match + substring + non-recursive).
     let synthetic = serde_json::json!({
         "identifier": "default",
         "windows": ["main"],
-        "permissions": ["fs:default", "core:default"]
+        "permissions": [
+            "fs:default",                       // exact-match path
+            "fs:allow-appdata-write-recursive", // substring path (recursive)
+            "fs:allow-appdata-write",           // non-recursive write
+            "fs:allow-appdata-meta",            // non-recursive meta
+            "core:default",                     // benign
+        ]
     });
     let perms = synthetic["permissions"].as_array().unwrap();
     let found_banned: Vec<&str> = perms
@@ -73,8 +81,11 @@ fn capabilities_test_rejects_synthetic_violation() {
                     && FORBIDDEN_FS_SUBSTR.iter().any(|s| p.contains(s)))
         })
         .collect();
-    assert!(
-        !found_banned.is_empty(),
-        "synthetic banned perm not detected — rule predicate is broken"
+    // All FOUR synthetic banned perms must be caught (one exact + three substring).
+    assert_eq!(
+        found_banned.len(),
+        4,
+        "expected 4 banned perms, found {:?}",
+        found_banned
     );
 }
