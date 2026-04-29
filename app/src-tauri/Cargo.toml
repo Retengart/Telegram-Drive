@@ -43,4 +43,8 @@ async-stream = "0.3"
 actix-rt = "2"
 tauri-plugin-process = "2.3.1"
 rand = "0.8"
+thiserror = "2"
+
+[dev-dependencies]
+serde_json = "1"
 
