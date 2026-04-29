@@ -96,6 +96,11 @@ pub async fn cmd_delete_folder(
     log::info!("Deleting folder/channel: {}", folder_id);
 
     // [scoping] gate — reject non-TD peers and Saved Messages.
+    // allow_saved_messages: false is defence-in-depth — folder_id is i64 here
+    // (NOT Option<i64>), so Some(folder_id) is always Some at this call site,
+    // and CannotDeleteSavedMessages is unreachable today. If this signature
+    // ever becomes Option<i64>, the false flag prevents accidental Saved-
+    // Messages deletion.
     let peer = require_td_peer(&state, &client, Some(folder_id), false).await
         .map_err(|e| {
             log::warn!("[scoping] reject command=cmd_delete_folder folder_id={:?} reason={}", Some(folder_id), e);
