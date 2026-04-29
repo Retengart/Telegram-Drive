@@ -60,10 +60,16 @@ pub async fn cmd_create_folder(
          access_hash,
     });
 
-    let _ = client.invoke(&tl::functions::messages::SetHistoryTtl {
+    // SetHistoryTtl failure is non-fatal: the channel is already created with a
+    // [TD] title (cache-marker via title path still works). Log the warning so
+    // a half-created channel state is observable; the cache insert below stays
+    // because the title marker is set unconditionally on CreateChannel success.
+    if let Err(e) = client.invoke(&tl::functions::messages::SetHistoryTtl {
         peer: tl::enums::InputPeer::Channel(tl::types::InputPeerChannel { channel_id: chat_id, access_hash }),
         period: 0,
-    }).await;
+    }).await {
+        log::warn!("SetHistoryTtl failed for new channel {} (TTL not disabled): {}", chat_id, e);
+    }
 
     // [scoping] cache populate — insert the just-created TD channel.
     {
