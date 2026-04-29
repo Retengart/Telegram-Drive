@@ -51,6 +51,7 @@ pub fn run() {
                 api_id: Arc::new(Mutex::new(None)),
                 runner_shutdown: Arc::new(std::sync::Mutex::new(None)),
                 runner_count: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+                td_channel_cache: Arc::new(tokio::sync::RwLock::new(std::collections::HashSet::new())),
             });
             app.manage(bandwidth::BandwidthManager::new(app.handle()));
             app.manage(StreamToken(stream_token.clone()));
