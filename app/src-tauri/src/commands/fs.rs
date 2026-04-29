@@ -61,8 +61,15 @@ pub async fn cmd_create_folder(
 
     let _ = client.invoke(&tl::functions::messages::SetHistoryTtl {
         peer: tl::enums::InputPeer::Channel(tl::types::InputPeerChannel { channel_id: chat_id, access_hash }),
-        period: 0, 
+        period: 0,
     }).await;
+
+    // [scoping] cache populate — insert the just-created TD channel.
+    {
+        let mut guard = state.td_channel_cache.write().await;
+        guard.insert(chat_id);
+    }
+    log::info!("[scoping] cache insert id={} (cmd_create_folder)", chat_id);
 
     Ok(FolderMetadata {
         id: chat_id,
@@ -103,7 +110,14 @@ pub async fn cmd_delete_folder(
     client.invoke(&tl::functions::channels::DeleteChannel {
         channel: input_channel,
     }).await.map_err(|e| format!("Failed to delete channel: {}", e))?;
-    
+
+    // [scoping] cache invalidate — DeleteChannel succeeded, drop the id.
+    {
+        let mut guard = state.td_channel_cache.write().await;
+        guard.remove(&folder_id);
+    }
+    log::info!("[scoping] cache remove id={} (cmd_delete_folder)", folder_id);
+
     Ok(true)
 }
 
@@ -474,5 +488,13 @@ pub async fn cmd_scan_folders(
     }
     
     log::info!("Scan complete. Found {} folders.", folders.len());
+    // [scoping] cache populate — wholesale replace per D-02 (cmd_scan_folders is
+    // authoritative; folders the user created via the Telegram desktop client
+    // between scans get refreshed here).
+    {
+        let mut guard = state.td_channel_cache.write().await;
+        *guard = folders.iter().map(|f| f.id).collect::<std::collections::HashSet<i64>>();
+    }
+    log::info!("[scoping] cache populated with {} TD channels", folders.len());
     Ok(folders)
 }
