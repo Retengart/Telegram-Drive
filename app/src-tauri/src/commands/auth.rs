@@ -186,6 +186,12 @@ pub async fn cmd_logout(
     *state.password_token.lock().await = None;
     *state.api_id.lock().await = None;
 
+    // [scoping] clear the TD channel cache — next login will repopulate via cmd_scan_folders.
+    {
+        let mut guard = state.td_channel_cache.write().await;
+        guard.clear();
+    }
+
     // 4. Remove Session File
     let app_data_dir = app_handle.path().app_data_dir().unwrap();
     let session_path = app_data_dir.join("telegram.session");
