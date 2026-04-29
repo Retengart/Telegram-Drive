@@ -1,7 +1,7 @@
 use actix_web::{get, web, App, HttpServer, HttpResponse, Responder};
 use actix_cors::Cors;
 use crate::commands::TelegramState;
-use crate::commands::utils::resolve_peer;
+use crate::commands::scoping::require_td_peer;
 use grammers_client::types::Media;
 
 use std::sync::Arc;
@@ -46,48 +46,55 @@ async fn stream_media(
     };
 
     if let Some(client) = client_opt {
-        match resolve_peer(&client, folder_id).await {
-            Ok(peer) => {
-                // Try to fetch message efficiently
-                 match client.get_messages_by_id(peer, &[message_id]).await {
-                    Ok(messages) => {
-                        if let Some(Some(msg)) = messages.first() {
-                            if let Some(media) = msg.media() {
-                                let size = match &media {
-                                    Media::Document(d) => d.size(),
-                                    Media::Photo(_) => 0, 
-                                    _ => 0,
-                                };
-                                
-                                let mime = mime_type_from_media(&media);
-                                
-                                // Create chunk-streaming response
-                                let mut download_iter = client.iter_download(&media);
-                                let stream = async_stream::stream! {
-                                    while let Some(chunk) = download_iter.next().await.transpose() {
-                                        match chunk {
-                                            Ok(bytes) => yield Ok::<_, actix_web::Error>(web::Bytes::from(bytes)),
-                                            Err(e) => {
-                                                log::error!("Stream error: {}", e);
-                                                break;
-                                            }
-                                        }
+        // [scoping] gate — reject non-TD peers (allow Saved Messages per D-09).
+        // Note: data is web::Data<Arc<TelegramState>>. require_td_peer takes
+        // &TelegramState, so we deref twice: web::Data -> Arc -> TelegramState.
+        let peer = match require_td_peer(&**data, &client, folder_id, true).await {
+            Ok(p) => p,
+            Err(e) => {
+                log::warn!("[scoping] reject command=stream_media folder_id={:?} reason={}", folder_id, e);
+                let body = serde_json::to_string(&e).unwrap_or_else(|_| e.to_string());
+                return HttpResponse::Forbidden().body(body);
+            }
+        };
+
+        // Try to fetch message efficiently (peer reused from gate)
+        match client.get_messages_by_id(peer, &[message_id]).await {
+            Ok(messages) => {
+                if let Some(Some(msg)) = messages.first() {
+                    if let Some(media) = msg.media() {
+                        let size = match &media {
+                            Media::Document(d) => d.size(),
+                            Media::Photo(_) => 0,
+                            _ => 0,
+                        };
+
+                        let mime = mime_type_from_media(&media);
+
+                        // Create chunk-streaming response
+                        let mut download_iter = client.iter_download(&media);
+                        let stream = async_stream::stream! {
+                            while let Some(chunk) = download_iter.next().await.transpose() {
+                                match chunk {
+                                    Ok(bytes) => yield Ok::<_, actix_web::Error>(web::Bytes::from(bytes)),
+                                    Err(e) => {
+                                        log::error!("Stream error: {}", e);
+                                        break;
                                     }
-                                };
-                                
-                                return HttpResponse::Ok()
-                                    .insert_header(("Content-Type", mime)) 
-                                    .insert_header(("Content-Length", size.to_string()))
-                                    .insert_header(("Cache-Control", "private, max-age=120"))
-                                    .streaming(stream);
+                                }
                             }
-                        }
-                        HttpResponse::NotFound().body("Message or media not found")
-                    },
-                    Err(e) => HttpResponse::InternalServerError().body(format!("Failed to fetch message: {}", e)),
-                 }
+                        };
+
+                        return HttpResponse::Ok()
+                            .insert_header(("Content-Type", mime))
+                            .insert_header(("Content-Length", size.to_string()))
+                            .insert_header(("Cache-Control", "private, max-age=120"))
+                            .streaming(stream);
+                    }
+                }
+                HttpResponse::NotFound().body("Message or media not found")
             },
-            Err(e) => HttpResponse::BadRequest().body(format!("Peer resolution failed: {}", e)),
+            Err(e) => HttpResponse::InternalServerError().body(format!("Failed to fetch message: {}", e)),
         }
     } else {
         HttpResponse::ServiceUnavailable().body("Telegram client not connected")
